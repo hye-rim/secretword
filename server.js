@@ -13,13 +13,12 @@ const L = require('./public/logic.js');
 const PORT = process.env.PORT || 3029;
 // 제한 시간(시험에서는 환경변수로 줄인다)
 const SECRET_MS = Number(process.env.SECRET_MS) || 30000;   // 숨길 단어 고르기. 넘기면 첫 후보로
-const HINT_MS = Number(process.env.HINT_MS) || 90000;       // 한 단계 힌트 2개. 넘기면 남은 힌트를 서버가 채운다
-const GUESS_MS = Number(process.env.GUESS_MS) || 60000;     // 한 단계 답 3번. 넘기면 남은 답은 버린다
+const HINT_MS = Number(process.env.HINT_MS) || 180000;      // 한 단계 힌트(95% 이상이 나올 때까지). 넘기면 서버가 95% 이상 힌트로 끝낸다
+const GUESS_MS = Number(process.env.GUESS_MS) || 60000;     // 한 단계 답(피스 포함). 넘기면 못 맞힌 것으로
 const NEXT_MS = Number(process.env.NEXT_MS) || 12000;       // 차례 결과를 보는 시간. 둘 다 다음을 누르면 바로 넘어간다
 const GRACE_MS = 30000;         // 대국 중 연결이 끊겨도 이 시간 안에 돌아오면 이어서 한다
 const HEARTBEAT_MS = 25000;
 const SILENCE_TIMEOUT_MS = 90000;
-const OPTIONS = 5, REROLLS = 3; // 숨길 단어 후보 수, 다시 뽑기 횟수
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 // ---------- 단어 자료 ----------
@@ -109,7 +108,6 @@ function createRoom(isPrivate) {
     code: makeCode(), isPrivate,
     seats: [],               // { client, name, side('you'|'cpu': 규칙 코드의 이름. 'cpu' 가 각 라운드에 먼저 출제), token, online, graceTimer }
     g: null,
-    options: [], rerolls: 0, // 출제자에게만 보이는 숨길 단어 후보
     state: 'waiting',        // waiting | playing | over
     reason: '',              // finish | left
     winner: null,            // 'you' | 'cpu' | null(무승부)
@@ -132,19 +130,16 @@ function arm(room, ms, fn) {
 
 function snapshot(room, seat) {
   const me = seat.side, g = room.g, t = g && g.t;
-  const pub = (h) => ({ word: h.word, sim: Math.round(h.sim * 10000) / 10000, rank: h.rank, stage: h.stage });
   let turn = null;
   if (t) {
     const iSet = t.setter === me;
     turn = {
-      round: t.round, iSet, stage: t.stage, phase: t.phase, done: t.done,
-      hints: t.hints.map(pub),
-      guesses: t.guesses.map((h) => ({ ...pub(h), correct: h.correct })),
-      // 숨긴 단어는 출제자에게만, 차례가 끝나면 둘 다에게
+      round: t.round, iSet, stage: t.stage, phase: t.phase, done: t.done, solved: t.solved, pts: t.pts,
+      hints: t.hints.map((h) => ({ word: h.word, sim: Math.round(h.sim * 100) / 100, stage: h.stage })),
+      guesses: t.guesses.map((h) => ({ word: h.word, stage: h.stage, correct: h.correct })), // 답은 맞음·틀림만
+      // 숨긴 단어는 출제자에게만, 차례가 끝나면 둘 다에게. 후보 단어는 고를 때 출제자에게만
       secret: t.secret >= 0 && (iSet || t.done) ? E.words[t.secret] : null,
-      options: iSet && t.phase === 'secret' ? room.options.map((i) => E.words[i]) : null,
-      rerollsLeft: REROLLS - room.rerolls,
-      result: t.result ? { mine: t.result.who === me, pts: t.result.pts } : null,
+      options: iSet && t.phase === 'secret' ? g.deck[me].map((i) => E.words[i]) : null,
       last: g.ti + 1 >= g.order.length,
       nextReady: room.nextReady.has(me),
     };
@@ -155,8 +150,9 @@ function snapshot(room, seat) {
     state: room.state, reason: room.reason,
     winner: room.state === 'over' ? (room.winner === null ? 'draw' : room.winner === me ? 'me' : 'opp') : null,
     score: g ? { me: g.score[me], opp: g.score[otherSide(me)] } : { me: 0, opp: 0 },
+    pieces: g ? { me: g.pieces[me], opp: g.pieces[otherSide(me)] } : { me: 0, opp: 0 },
     turn,
-    history: g ? g.history.map((h) => ({ round: h.round, iSet: h.setter === me, word: h.word, mine: h.who === me, pts: h.pts, stage: h.stage, solved: h.who !== h.setter })) : [],
+    history: g ? g.history.map((h) => ({ round: h.round, iSet: h.setter === me, word: h.word, solved: h.solved, stage: h.stage, pts: h.pts })) : [],
     remain: room.state === 'playing' && room.timer ? Math.max(0, room.deadline - Date.now()) : 0,
     rematch: room.rematch.size, iRematch: room.rematch.has(me),
   };
@@ -184,32 +180,32 @@ function startGame(room, first) {
   pushRoom(room);
 }
 
-function rollOptions(room) {
-  const used = new Set(room.g.history.map((h) => h.secret).concat(room.options));
-  const pool = E.answers.filter((i) => !used.has(i));
-  for (let i = pool.length - 1; i > 0; i--) { const j = crypto.randomInt(i + 1); [pool[i], pool[j]] = [pool[j], pool[i]]; }
-  room.options = pool.slice(0, OPTIONS);
-}
 function beginTurn(room) {
-  room.options = []; room.rerolls = 0; room.nextReady.clear();
-  rollOptions(room);
+  room.nextReady.clear();
   arm(room, SECRET_MS, () => chooseSecret(room, 0));
 }
 function chooseSecret(room, k) {
-  const t = room.g.t;
-  if (L.setSecret(room.g, t.setter, room.options[k]).ok) armHints(room);
+  const g = room.g, t = g.t, d = g.deck[t.setter];
+  if (k >= 0 && k < d.length && L.setSecret(g, t.setter, d[k]).ok) armHints(room);
 }
 function armHints(room) { arm(room, HINT_MS, () => autoHints(room)); }
-// 시간 안에 힌트를 다 못 내면 서버가 규칙에 맞는 힌트로 채운다
+// 시간 안에 95% 이상 힌트를 못 내면 서버가 95% 이상 힌트를 내서 단계를 끝낸다
 function autoHints(room) {
   const g = room.g, t = g.t;
-  while (t.phase === 'hint') { const h = L.cpuHint(g); if (h < 0 || !L.addHint(g, t.setter, h).ok) break; }
-  if (t.phase === 'guess') arm(room, GUESS_MS, () => forfeit(room));
+  let guard = 0;
+  while (t.phase === 'hint' && guard++ < 20) { const h = L.cpuHint(g, { finish: true }); if (h < 0 || !L.addHint(g, t.setter, h).ok) break; }
+  if (t.phase === 'guess') armGuess(room);
 }
+function armGuess(room) { arm(room, GUESS_MS, () => forfeit(room)); }
 function forfeit(room) {
   const r = L.forfeitGuesses(room.g);
   if (r.nextStage) armHints(room);
   else if (r.turnOver) turnDone(room);
+}
+// 답·피스 결과에 따라 다음 일정
+function afterGuess(room, r) {
+  if (r.turnOver) turnDone(room);
+  else if (r.nextStage) armHints(room);
 }
 function turnDone(room) {
   room.nextReady.clear();
@@ -300,41 +296,47 @@ const handlers = {
     if (seat && room.state === 'waiting') vacate(room, seat);
   },
 
-  // 숨길 단어: 서버가 준 후보 중 k 번째
+  // 숨길 단어: 내 후보 중 k 번째
   secret(client, msg) {
     const c = current(client);
     if (!c || c.t.setter !== c.seat.side || c.t.phase !== 'secret') return;
-    if (!Number.isInteger(msg.k) || msg.k < 0 || msg.k >= c.room.options.length) return;
+    if (!Number.isInteger(msg.k) || msg.k < 0 || msg.k >= c.g.deck[c.seat.side].length) return;
     chooseSecret(c.room, msg.k); pushRoom(c.room);
-  },
-  reroll(client) {
-    const c = current(client);
-    if (!c || c.t.setter !== c.seat.side || c.t.phase !== 'secret' || c.room.rerolls >= REROLLS) return;
-    c.room.rerolls++; rollOptions(c.room); pushRoom(c.room);
   },
   hint(client, msg) {
     const c = current(client), w = wordArg(msg.w);
     if (!c || w === null || c.t.setter !== c.seat.side || c.t.phase !== 'hint') return;
     const r = L.addHint(c.g, c.seat.side, w);
-    if (!r.ok) return send(client.ws, 'reject', { err: r.err, w, rank: r.rank || 0, limit: r.limit || 0 });
-    if (c.t.phase === 'guess') arm(c.room, GUESS_MS, () => forfeit(c.room));
+    if (!r.ok) return send(client.ws, 'reject', { err: r.err, w });
+    if (r.guessNow) armGuess(c.room);
     pushRoom(c.room);
   },
-  // 출제자가 쓸 수 있는 힌트 하나 (출제자에게만)
+  // 출제자가 쓸 만한 힌트 하나 (출제자에게만)
   suggest(client) {
     const c = current(client);
     if (!c || c.t.setter !== c.seat.side || c.t.phase !== 'hint') return;
     const h = L.cpuHint(c.g);
-    if (h >= 0) send(client.ws, 'suggestion', { w: E.words[h], rank: E.table(c.t.secret).rank[h] });
+    if (h >= 0) send(client.ws, 'suggestion', { w: E.words[h], sim: E.table(c.t.secret).score(h) });
   },
   guess(client, msg) {
     const c = current(client), w = wordArg(msg.w);
     if (!c || w === null || c.t.guesser !== c.seat.side || c.t.phase !== 'guess') return;
     const r = L.guess(c.g, c.seat.side, w);
     if (!r.ok) return send(client.ws, 'reject', { err: r.err, w });
-    if (r.turnOver) turnDone(c.room);
-    else if (r.nextStage) armHints(c.room);
+    afterGuess(c.room, r);
     pushRoom(c.room);
+  },
+  // 틀린 뒤: 피스로 한 번 더, 또는 넘기기
+  piece(client) {
+    const c = current(client);
+    if (!c || c.t.guesser !== c.seat.side) return;
+    if (L.usePiece(c.g, c.seat.side).ok) pushRoom(c.room);
+  },
+  pass(client) {
+    const c = current(client);
+    if (!c || c.t.guesser !== c.seat.side) return;
+    const r = L.passExtra(c.g, c.seat.side);
+    if (r.ok) { afterGuess(c.room, r); pushRoom(c.room); }
   },
   next(client) {
     const c = current(client);

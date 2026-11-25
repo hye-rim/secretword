@@ -56,7 +56,7 @@ async function pair() {
   return [a, b];
 }
 const roles = (a, b) => (a.room.turn.iSet ? [a, b] : [b, a]);   // [출제자, 맞히는 쪽]
-// 출제자가 추천 힌트를 받아 낸다
+// 출제자가 추천 힌트를 받아 낸다 (하나)
 async function giveHint(setter, guesser) {
   const n = setter.room.turn.hints.length;
   setter.suggestion = null; send(setter, 'suggest');
@@ -64,11 +64,17 @@ async function giveHint(setter, guesser) {
   send(setter, 'hint', { w: setter.suggestion.w });
   assert.ok(await until(() => setter.room.turn.hints.length > n && guesser.room.turn.hints.length > n), 'hint reaches both');
 }
+// 95% 이상 힌트가 나올 때까지
+async function hintUntilGuess(setter, guesser) {
+  for (let k = 0; k < 12 && guesser.room.turn.phase === 'hint'; k++) await giveHint(setter, guesser);
+  assert.ok(await until(() => guesser.room.turn.phase === 'guess'), 'guessing opens after a 95 hint');
+}
 async function guessWord(guesser, w) {
   const n = guesser.room.turn.guesses.length;
   send(guesser, 'guess', { w });
   assert.ok(await until(() => guesser.room.turn.guesses.length > n || guesser.room.turn.done), 'guess accepted');
 }
+const WRONG = ['우주', '전쟁', '선거', '축구', '병원', '음악'];
 
 test('malformed URLs get 400, data files are served, dotfiles are not', async () => {
   await ready;
@@ -90,7 +96,7 @@ test('oversized websocket message closes the connection (1009)', async () => {
   assert.strictEqual(await get('/'), 200);
 });
 
-test('quick match: one setter gets five options, the guesser sees no secret', async () => {
+test('quick match: the setter gets five own options, the guesser sees no secret', async () => {
   await ready;
   const [a, b] = await pair();
   assert.strictEqual(a.room.code, b.room.code);
@@ -99,9 +105,8 @@ test('quick match: one setter gets five options, the guesser sees no secret', as
   assert.strictEqual(s.room.turn.phase, 'secret');
   assert.strictEqual(s.room.turn.options.length, 5);
   assert.strictEqual(q.room.turn.options, null);
+  assert.deepStrictEqual(s.room.pieces, { me: 2, opp: 2 });
   send(q, 'secret', { k: 0 });                                    // 맞히는 쪽은 못 고른다
-  await sleep(150);
-  assert.strictEqual(s.room.turn.phase, 'secret');
   for (const bad of [-1, 5, 'x', 1.5, null]) send(s, 'secret', { k: bad });
   await sleep(150);
   assert.strictEqual(s.room.turn.phase, 'secret', 'garbage choices are ignored');
@@ -114,7 +119,7 @@ test('quick match: one setter gets five options, the guesser sees no secret', as
   a.ws.close(); b.ws.close();
 });
 
-test('hints: rule breaks are rejected privately, guesser cannot hint, two hints open guessing', async () => {
+test('hints continue until one reaches 95, rule breaks are rejected privately', async () => {
   await ready;
   const [a, b] = await pair();
   const [s, q] = roles(a, b);
@@ -127,51 +132,60 @@ test('hints: rule breaks are rejected privately, guesser cannot hint, two hints 
   assert.deepStrictEqual(s.rejects.map((r) => r.err).slice(0, 2), ['secret', 'unknown']);
   assert.strictEqual(q.rejects.length, 0);
   assert.strictEqual(s.room.turn.hints.length, 0);
-  await giveHint(s, q);
-  assert.strictEqual(q.room.turn.phase, 'hint');
-  await giveHint(s, q);
-  assert.ok(await until(() => q.room.turn.phase === 'guess'));
-  const h = q.room.turn.hints[0];
-  assert.ok(h.rank >= 4 && h.rank <= 300 && typeof h.sim === 'number' && h.word);
+  send(q, 'guess', { w: '사과' }); await sleep(100);
+  assert.strictEqual(q.room.turn.guesses.length, 0, 'no guessing before a 95 hint');
+  await hintUntilGuess(s, q);
+  const hs = q.room.turn.hints;
+  assert.ok(hs[hs.length - 1].sim >= 95 && hs.slice(0, -1).every((h) => h.sim < 95));
   a.ws.close(); b.ws.close();
 });
 
-test('three wrong guesses move to stage 2, a correct guess scores 2 and both next swaps the setter', async () => {
+test('answers show only right or wrong; piece, pass and stage points; a correct answer scores 1', async () => {
   await ready;
   const [a, b] = await pair();
   const [s, q] = roles(a, b);
   send(s, 'secret', { k: 1 }); await until(() => s.room.turn.phase === 'hint');
   const secret = s.room.turn.secret;
-  await giveHint(s, q); await giveHint(s, q);
-  await until(() => q.room.turn.phase === 'guess');
-  send(s, 'guess', { w: secret });                                 // 출제자는 답을 못 낸다
-  await sleep(150);
-  assert.strictEqual(q.room.turn.guesses.length, 0);
-  for (const w of ['우주', '전쟁', '선거'].filter((x) => x !== secret)) await guessWord(q, w);
-  assert.ok(await until(() => q.room.turn.stage === 2 && q.room.turn.phase === 'hint'), 'stage 2 starts');
-  await giveHint(s, q); await giveHint(s, q);
-  await until(() => q.room.turn.phase === 'guess');
+  await hintUntilGuess(s, q);
+  send(s, 'guess', { w: secret }); await sleep(100);
+  assert.strictEqual(q.room.turn.guesses.length, 0, 'the setter cannot answer');
+  const wrong = WRONG.filter((w) => w !== secret && !q.room.turn.hints.some((h) => h.word === w));
+  await guessWord(q, wrong[0]);
+  const g0 = q.room.turn.guesses[0];
+  assert.deepStrictEqual(Object.keys(g0).sort(), ['correct', 'stage', 'word'], 'no similarity for an answer');
+  assert.ok(await until(() => q.room.turn.phase === 'extra'));
+  send(q, 'piece');
+  assert.ok(await until(() => q.room.turn.phase === 'guess' && q.room.pieces.me === 1));
+  await guessWord(q, wrong[1]);
+  assert.ok(await until(() => q.room.turn.stage === 2 && q.room.turn.phase === 'hint'), 'stage 2 after two wrong answers');
+  assert.deepStrictEqual(s.room.score, { me: 1, opp: 0 }, 'setter gets 1 for stage 1');
+  await hintUntilGuess(s, q);
+  await guessWord(q, wrong[2]);
+  assert.ok(await until(() => q.room.turn.phase === 'extra'));
+  send(q, 'pass');
+  assert.ok(await until(() => q.room.turn.stage === 3));
+  assert.deepStrictEqual(s.room.score, { me: 3, opp: 0 });
+  await hintUntilGuess(s, q);
   await guessWord(q, secret);
   assert.ok(await until(() => q.room.turn.done && s.room.turn.done));
   assert.strictEqual(q.room.turn.secret, secret, 'revealed after the turn');
-  assert.deepStrictEqual(q.room.score, { me: 2, opp: 0 });
-  assert.deepStrictEqual(s.room.score, { me: 0, opp: 2 });
-  assert.strictEqual(q.room.history.length, 1);
+  assert.deepStrictEqual(q.room.score, { me: 1, opp: 3 });
   send(q, 'next'); await sleep(100);
   assert.ok(q.room.turn.done, 'one next is not enough');
   send(s, 'next');
   assert.ok(await until(() => !q.room.turn.done && q.room.turn.iSet && !s.room.turn.iSet), 'roles swap for the next turn');
+  assert.strictEqual(q.room.turn.options.length, 5);
   a.ws.close(); b.ws.close();
 });
 
-test('when nobody acts, timers pick the secret, fill hints and the setter scores 2', async () => {
+test('when nobody acts, timers end every stage and the setter scores 1+2+3', async () => {
   await ready;
   const [a, b] = await pair();
   const [s, q] = roles(a, b);
-  assert.ok(await until(() => s.room.turn.done, 12 * T), 'the turn finishes on timers alone');
-  assert.strictEqual(s.room.turn.hints.length, 6, 'two hints per stage were filled');
-  assert.strictEqual(s.room.turn.guesses.length, 0);
-  assert.deepStrictEqual(s.room.score, { me: 2, opp: 0 });
+  assert.ok(await until(() => s.room.turn.done, 10 * T), 'the turn finishes on timers alone');
+  assert.strictEqual(s.room.turn.hints.length, 3, 'one 95 hint per stage was filled');
+  assert.ok(s.room.turn.hints.every((h) => h.sim >= 95));
+  assert.deepStrictEqual(s.room.score, { me: 6, opp: 0 });
   assert.ok(await until(() => !s.room.turn.done && q.room.turn.iSet, 2 * T + 500), 'next turn starts by itself');
   a.ws.close(); b.ws.close();
 });
