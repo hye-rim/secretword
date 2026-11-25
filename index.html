@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>숨은 단어</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Jua&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; }
+  :root { --ink:#1f2a3a; --yellow:#ffd23f; --muted:#5f6b7d; --mint:#3ec9a7; --pink:#ff6f91; }
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { width:100%; height:100%; overflow:hidden; background:linear-gradient(180deg, #2c6e8f 0%, #1f4c6b 55%, #13283d 100%); font-family:'Jua', -apple-system, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif; color:#fff; touch-action:manipulation; }
+  #stage { width:100%; height:100dvh; display:flex; justify-content:center; padding:8px; }
+  #col { position:relative; width:min(100%, 440px); height:100%; display:flex; flex-direction:column; gap:7px; }
+  #hud { display:flex; align-items:center; gap:6px; width:100%; color:var(--ink); flex:none; }
+  #hud .item { display:flex; align-items:center; gap:6px; white-space:nowrap; background:var(--yellow); border:3px solid var(--ink); border-radius:999px; box-shadow:0 4px 0 var(--ink); padding:2px 11px; height:38px; flex:1; min-width:0; justify-content:center; }
+  #hud .label { font-size:11px; color:var(--muted); } #hud .value { font-size:18px; }
+  #hud button { background:#fff; border:3px solid var(--ink); color:var(--ink); width:36px; height:36px; border-radius:12px; font-size:15px; cursor:pointer; box-shadow:0 4px 0 var(--ink); flex:none; }
+  #banner { flex:none; width:100%; min-height:44px; background:#fff; color:var(--ink); border:3px solid var(--ink); border-radius:14px; box-shadow:0 4px 0 var(--ink); padding:5px 10px; font-size:15px; text-align:center; line-height:1.35; display:flex; flex-direction:column; align-items:center; justify-content:center; }
+  #banner b { color:#d23f7a; font-weight:400; }
+  #banner small { font-size:12px; color:var(--muted); }
+  #secretTag { display:inline-block; margin-left:4px; background:#ffe36e; border:2px solid var(--ink); border-radius:8px; padding:0 7px; }
+  #log { flex:1; min-height:0; overflow-y:auto; touch-action:pan-y; background:rgba(255,255,255,.1); border:3px solid rgba(255,255,255,.25); border-radius:14px; padding:7px; display:flex; flex-direction:column; gap:5px; }
+  .stageHead { font-size:12px; color:#bfe3ff; margin-top:2px; display:flex; justify-content:space-between; }
+  .row { position:relative; display:flex; align-items:center; gap:8px; background:#fff; color:var(--ink); border:2px solid var(--ink); border-radius:10px; padding:4px 9px; overflow:hidden; min-height:34px; }
+  .row .bar { position:absolute; left:0; top:0; bottom:0; background:#cdeffd; z-index:0; }
+  .row.guess .bar { background:#ffe3ea; }
+  .row.correct { background:#9be7a8; } .row.correct .bar { display:none; }
+  .row > span { position:relative; z-index:1; }
+  .row .who { font-size:11px; color:var(--muted); width:30px; flex:none; }
+  .row .w { flex:1; font-size:17px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .row .s { font-size:15px; width:58px; text-align:right; flex:none; }
+  .row .r { font-size:12px; color:var(--muted); width:62px; text-align:right; flex:none; }
+  .row.fresh { animation:pop .4s ease-out; }
+  @keyframes pop { 0% { transform:scale(.85); opacity:.3; } 100% { transform:scale(1); opacity:1; } }
+  #logEmpty { margin:auto; font-size:13px; color:#bfe3ff; text-align:center; line-height:1.5; }
+  #msg { flex:none; min-height:36px; font-size:14px; text-align:center; line-height:1.4; text-shadow:0 2px 0 rgba(0,0,0,.4); padding:0 6px; }
+  #msg b { color:var(--yellow); font-weight:400; }
+  #pickBox { flex:none; display:grid; grid-template-columns:repeat(3, 1fr); gap:6px; }
+  #pickBox.hidden, #inputRow.hidden, #nextBtn.hidden { display:none; }
+  #pickBox button { font:inherit; font-size:17px; color:var(--ink); background:#fff; border:3px solid var(--ink); border-radius:12px; box-shadow:0 4px 0 var(--ink); padding:7px 4px; cursor:pointer; }
+  #pickBox button.re { background:#e4f1ff; font-size:14px; }
+  #inputRow { flex:none; display:flex; gap:6px; }
+  #word { flex:1; min-width:0; font:inherit; font-size:18px; color:var(--ink); background:#fff; border:3px solid var(--ink); border-radius:12px; padding:6px 10px; -webkit-user-select:text; user-select:text; outline:none; }
+  #word:focus { box-shadow:0 0 0 3px var(--yellow); }
+  #inputRow button, #nextBtn { font:inherit; font-size:16px; color:var(--ink); background:var(--yellow); border:3px solid var(--ink); border-radius:12px; box-shadow:0 4px 0 var(--ink); padding:6px 12px; cursor:pointer; white-space:nowrap; }
+  #inputRow button.sub { background:#fff; padding:6px 9px; }
+  #inputRow button:disabled { opacity:.45; cursor:default; }
+  #nextBtn { flex:none; align-self:center; padding:7px 28px; }
+  #overlay { position:absolute; inset:0; z-index:40; display:flex; flex-direction:column; align-items:center; justify-content:safe center; gap:11px; text-align:center; padding:14px; background:rgba(19,40,61,.97); overflow-y:auto; touch-action:pan-y; border-radius:14px; }
+  #overlay.hidden { display:none; }
+  #overlay h1, #overlay h2 { color:#fff; font-weight:400; paint-order:stroke fill; -webkit-text-stroke:6px var(--ink); text-shadow:0 5px 0 var(--ink); } #overlay h1 { font-size:clamp(32px, 9vw, 44px); line-height:1.05; color:var(--yellow); } #overlay h2 { font-size:28px; }
+  #overlay p { font-size:12.5px; line-height:1.6; } #overlay p b { color:var(--yellow); font-weight:400; }
+  #overlay .col { display:flex; flex-direction:column; align-items:center; gap:8px; }
+  #overlay button { background:var(--yellow); color:var(--ink); font-size:18px; font-family:inherit; border:3px solid var(--ink); border-radius:999px; padding:7px 24px; box-shadow:0 5px 0 var(--ink); cursor:pointer; }
+  #overlay button:disabled { opacity:.5; }
+  #overlay button.sub { background:#fff; font-size:14px; padding:5px 18px; } #overlay button small { display:block; font-size:10px; color:var(--muted); } #overlay button:active { transform:translateY(4px); box-shadow:0 1px 0 var(--ink); }
+  #overlay table { border-collapse:collapse; font-size:13px; } #overlay td { padding:3px 8px; border-bottom:1px solid rgba(255,255,255,.2); } #overlay td b { color:var(--yellow); font-weight:400; }
+  #overlay .credit { font-size:10px; color:#9fb4c8; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="col">
+    <div id="hud">
+      <button id="homeBtn" title="처음으로">🏠</button>
+      <div class="item"><span class="label" id="lvLabel">보통</span><span class="label" id="roundLabel">1라운드</span><span class="value" id="scoreText">나 0 : 0 컴</span></div>
+      <button id="muteBtn" title="소리 (M)">🔊</button>
+    </div>
+    <div id="banner"><span id="bannerText"></span><small id="bannerSub"></small></div>
+    <div id="log"></div>
+    <div id="msg"></div>
+    <div id="pickBox" class="hidden"></div>
+    <div id="inputRow" class="hidden"><input id="word" type="text" maxlength="12" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="send" placeholder="단어 입력"><button id="suggestBtn" class="sub" title="쓸 수 있는 힌트 하나 추천">💡</button><button id="sendBtn">맞히기</button></div>
+    <button id="nextBtn" class="hidden">다음 ▶</button>
+    <div id="overlay"></div>
+  </div>
+</div>
+<script src="logic.js"></script>
+<script src="game.js"></script>
+</body>
+</html>
