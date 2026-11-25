@@ -111,6 +111,12 @@ const LOGIC_SW = (() => {
     g.score[who] += pts;
     g.history.push({ round: t.round, setter: t.setter, secret: t.secret, word: g.E.words[t.secret], who, pts, stage: t.stage, hints: t.hints.slice(), guesses: t.guesses.slice() });
   }
+  // 제한 시간이 지나 남은 답을 버린다(온라인). 다음 단계로, 3단계였으면 출제자 점수
+  function forfeitGuesses(g) {
+    const t = g.t; if (!t || t.phase !== 'guess') return { ok: false, err: 'turn' };
+    if (t.stage < STAGES) { t.stage++; t.phase = 'hint'; return { ok: true, nextStage: true }; }
+    finishTurn(g, t.setter, SETTER_PTS * mult(g)); return { ok: true, turnOver: true };
+  }
   function nextTurn(g) { if (g.t && !g.t.done) return false; beginTurn(g); return true; }
   const winner = (g) => (g.score.you > g.score.cpu ? 'you' : g.score.cpu > g.score.you ? 'cpu' : null);
 
@@ -166,7 +172,7 @@ const LOGIC_SW = (() => {
     return 0;
   }
 
-  const api = { NOISE, HINT_BAND, DIM, STAGES, HINTS_PER_STAGE, GUESSES_PER_STAGE, RANK_LIMIT, MIN_RANK, GUESS_PTS, SETTER_PTS, LEVELS, mulberry32, makeEngine, pct, newGame, setSecret, checkHint, addHint, guess, nextTurn, winner, cpuSecret, cpuHint, cpuGuess, simulateTurn, stageHints, stageGuesses };
+  const api = { NOISE, HINT_BAND, DIM, STAGES, HINTS_PER_STAGE, GUESSES_PER_STAGE, RANK_LIMIT, MIN_RANK, GUESS_PTS, SETTER_PTS, LEVELS, mulberry32, makeEngine, pct, newGame, setSecret, checkHint, addHint, guess, forfeitGuesses, nextTurn, winner, cpuSecret, cpuHint, cpuGuess, simulateTurn, stageHints, stageGuesses };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   return api;
 })();

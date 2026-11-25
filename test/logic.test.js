@@ -5,9 +5,9 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
-const L = require('../logic.js');
+const L = require('../public/logic.js');
 
-const dir = path.join(__dirname, '..', 'data');
+const dir = path.join(__dirname, '..', 'public', 'data');
 const E = L.makeEngine(fs.readFileSync(path.join(dir, 'words.txt'), 'utf8'), new Int8Array(fs.readFileSync(path.join(dir, 'vecs.bin'))));
 const W = (w) => E.find(w);
 

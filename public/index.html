@@ -58,6 +58,10 @@
   #overlay button:disabled { opacity:.5; }
   #overlay button.sub { background:#fff; font-size:14px; padding:5px 18px; } #overlay button small { display:block; font-size:10px; color:var(--muted); } #overlay button:active { transform:translateY(4px); box-shadow:0 1px 0 var(--ink); }
   #overlay table { border-collapse:collapse; font-size:13px; } #overlay td { padding:3px 8px; border-bottom:1px solid rgba(255,255,255,.2); } #overlay td b { color:var(--yellow); font-weight:400; }
+  #overlay .field { font:inherit; font-size:17px; color:var(--ink); background:#fff; border:3px solid var(--ink); border-radius:12px; padding:6px 12px; width:min(100%, 260px); text-align:center; -webkit-user-select:text; user-select:text; outline:none; }
+  #overlay .joinRow { display:flex; gap:6px; align-items:center; justify-content:center; } #overlay .joinRow .field { width:120px; text-transform:uppercase; letter-spacing:3px; }
+  #overlay .err { color:#ff9db3; min-height:18px; }
+  #overlay .bigCode { font-size:46px; letter-spacing:8px; color:var(--yellow); paint-order:stroke fill; -webkit-text-stroke:6px var(--ink); -webkit-user-select:text; user-select:text; }
   #overlay .credit { font-size:10px; color:#9fb4c8; }
 </style>
 </head>
