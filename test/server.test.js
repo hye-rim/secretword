@@ -67,7 +67,7 @@ async function giveHint(setter, guesser) {
 // 95% 이상 힌트가 나올 때까지
 async function hintUntilGuess(setter, guesser) {
   for (let k = 0; k < 12 && guesser.room.turn.phase === 'hint'; k++) await giveHint(setter, guesser);
-  assert.ok(await until(() => guesser.room.turn.phase === 'guess'), 'guessing opens after a 95 hint');
+  assert.ok(await until(() => guesser.room.turn.phase === 'guess'), 'guessing opens after 10 hints or a 95 hint');
 }
 async function guessWord(guesser, w) {
   const n = guesser.room.turn.guesses.length;
@@ -119,7 +119,7 @@ test('quick match: the setter gets five own options, the guesser sees no secret'
   a.ws.close(); b.ws.close();
 });
 
-test('hints continue until one reaches 95, rule breaks are rejected privately', async () => {
+test('hints continue to ten (or a 95 hint), rule breaks are rejected privately', async () => {
   await ready;
   const [a, b] = await pair();
   const [s, q] = roles(a, b);
@@ -136,7 +136,8 @@ test('hints continue until one reaches 95, rule breaks are rejected privately', 
   assert.strictEqual(q.room.turn.guesses.length, 0, 'no guessing before a 95 hint');
   await hintUntilGuess(s, q);
   const hs = q.room.turn.hints;
-  assert.ok(hs[hs.length - 1].sim >= 95 && hs.slice(0, -1).every((h) => h.sim < 95));
+  assert.ok(hs.length === 10 || hs[hs.length - 1].sim >= 95);
+  assert.ok(hs.slice(0, -1).every((h) => h.sim < 95));
   a.ws.close(); b.ws.close();
 });
 
@@ -183,8 +184,7 @@ test('when nobody acts, timers end every stage and the setter scores 1+2+3', asy
   const [a, b] = await pair();
   const [s, q] = roles(a, b);
   assert.ok(await until(() => s.room.turn.done, 10 * T), 'the turn finishes on timers alone');
-  assert.strictEqual(s.room.turn.hints.length, 3, 'one 95 hint per stage was filled');
-  assert.ok(s.room.turn.hints.every((h) => h.sim >= 95));
+  for (let st = 1; st <= 3; st++) assert.strictEqual(s.room.turn.hints.filter((h) => h.stage === st).length, 10, 'ten hints per stage were filled');
   assert.deepStrictEqual(s.room.score, { me: 6, opp: 0 });
   assert.ok(await until(() => !s.room.turn.done && q.room.turn.iSet, 2 * T + 500), 'next turn starts by itself');
   a.ws.close(); b.ws.close();

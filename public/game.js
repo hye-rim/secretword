@@ -69,7 +69,7 @@ function beginTurn() {
   const t = g.t; fresh = null; $('nextBtn').classList.add('hidden');
   if (t.setter === 'cpu') {
     L.setSecret(g, 'cpu', TUT ? E.find(TUT_CPU[0]) : L.cpuSecret(g));
-    setMsg('컴퓨터가 단어를 숨겼어요. 힌트가 <b>95% 이상</b>이 나오면 답을 써요!');
+    setMsg('컴퓨터가 단어를 숨겼어요. 힌트 <b>10개</b>가 나오거나 <b>95% 이상</b> 힌트가 나오면 답을 써요!');
     render(); later(cpuHints, 800);
   } else {
     setMsg('이번엔 내가 출제자! 아래에서 <b>숨길 단어</b>를 골라요.' + (t.round > 1 ? ' (1라운드에 남은 4개)' : ''));
@@ -81,7 +81,7 @@ function chooseSecret(i) {
   if (online) { sfx.pick(); net.send('secret', { k: i }); return; }
   if (!L.setSecret(g, 'you', i).ok) return;
   sfx.pick(); tutorialSignal('secret');
-  setMsg('<b>' + josa(W(i), '</b>을', '</b>를') + ' 숨겼어요. 힌트를 내요. 유사도 <b>95% 이상</b>인 힌트가 나올 때까지 계속 내야 해요.');
+  setMsg('<b>' + josa(W(i), '</b>을', '</b>를') + ' 숨겼어요. 힌트를 <b>10개</b> 내요(<b>95% 이상</b>인 힌트를 내면 바로 끝).');
   render(); focusInput();
 }
 // 컴퓨터 힌트: 95% 이상이 나올 때까지 하나씩
@@ -91,7 +91,7 @@ function cpuHints() {
   if (h < 0) { setMsg('힌트를 고르지 못했어요.'); return; }
   const r = L.addHint(g, 'cpu', h); fresh = { kind: 'hint', w: W(h) }; r.pass ? sfx.pass() : sfx.hint();
   render();
-  if (g.t.phase === 'hint') later(cpuHints, 900);
+  if (g.t.phase === 'hint') later(cpuHints, 650);
   else { setMsg(guessPrompt()); render(); focusInput(); }
 }
 function guessPrompt() {
@@ -120,7 +120,7 @@ function afterStage(r) {
   const t = g.t;
   if (r.turnOver) { sfx.solve(); return reveal(); }
   if (!r.nextStage) return;
-  if (t.setter === 'you') { setMsg('못 맞혔어요! 출제 점수 <b>+' + r.stagePts + '</b>. 이제 <b>' + t.stage + '단계</b> 힌트를 내요(다시 95% 이상이 나올 때까지).'); render(); focusInput(); }
+  if (t.setter === 'you') { setMsg('못 맞혔어요! 출제 점수 <b>+' + r.stagePts + '</b>. 이제 <b>' + t.stage + '단계</b> 힌트 10개를 내요.'); render(); focusInput(); }
   else { setMsg('못 맞혔어요. 컴퓨터 +' + r.stagePts + '. 컴퓨터가 <b>' + t.stage + '단계</b> 힌트를 내요…'); render(); later(cpuHints, 900); }
 }
 
@@ -145,8 +145,8 @@ function send() {
     if (!r.ok) { sfx.bad(); setMsg(ERR[r.err] || '지금은 낼 수 없어요.'); return; }
     inp.value = ''; const last = g.t.hints[g.t.hints.length - 1]; fresh = { kind: 'hint', w: last.word };
     r.pass ? sfx.pass() : sfx.hint(); tutorialSignal('hint');
-    if (r.guessNow) { setMsg((r.pass ? '<b>' + L.fmt(r.sim) + '%</b>! 95% 이상이라 힌트 단계 끝. ' : '') + '컴퓨터가 맞혀요…'); render(); later(cpuGuesses, 1000); return; }
-    setMsg('유사도 <b>' + L.fmt(r.sim) + '%</b>. 95% 이상인 힌트가 나올 때까지 <b>계속</b> 내요.'); render(); focusInput(); return;
+    if (r.guessNow) { setMsg((r.pass ? '<b>' + L.fmt(r.sim) + '%</b>! 95% 이상이라 힌트 단계 끝. ' : '힌트 10개 끝! ') + '컴퓨터가 맞혀요…'); render(); later(cpuGuesses, 1000); return; }
+    setMsg('유사도 <b>' + L.fmt(r.sim) + '%</b>. 힌트 ' + L.stageHints(g.t).length + '/' + L.MAX_HINTS + ' — 계속 내요.'); render(); focusInput(); return;
   }
 }
 function afterStageMine(r) {
@@ -160,7 +160,7 @@ function piece(use) {
   if (use) { L.usePiece(g, 'you'); sfx.pick(); tutorialSignal('piece'); setMsg('🧩 피스를 썼어요. 답을 <b>한 번 더</b> 써요.'); render(); focusInput(); return; }
   const r = L.passExtra(g, 'you'); afterStageMine(r);
 }
-// 💡: 출제자에게 쓸 만한 힌트 하나 (95% 이상이 아닌 것 → 95% 이상 순서로)
+// 💡: 출제자에게 쓸 만한 힌트 하나
 function suggest() {
   if (!myHint()) return;
   if (online) { net.send('suggest'); return; }
@@ -191,13 +191,13 @@ function nextTurn() {
 function focusInput() { if (!matchMedia('(pointer:coarse)').matches) setTimeout(() => { try { $('word').focus(); } catch (_) {} }, 0); }
 
 // ---------- 그리기 ----------
-function row(kind, who, h) {
+function row(kind, who, h, best) {
   const d = document.createElement('div');
-  const pass = kind === 'hint' && h.sim >= L.PASS;
+  const pass = kind === 'hint' && (h.sim >= L.PASS || best);
   d.className = 'row ' + kind + (h.correct ? ' correct' : '') + (pass ? ' pass' : '') + (fresh && fresh.kind === kind && fresh.w === h.word ? ' fresh' : '');
   const bar = kind === 'hint' ? Math.max(0, Math.min(1, h.sim / 100)) : 0;
   d.innerHTML = '<span class="bar" style="width:' + (bar * 100).toFixed(0) + '%"></span><span class="who">' + who + '</span><span class="w"></span>' +
-    (kind === 'hint' ? '<span class="s">' + L.fmt(h.sim) + '%</span>' : '<span class="s">' + (h.correct ? '⭕ 정답' : '❌ 틀림') + '</span>');
+    (kind === 'hint' ? '<span class="s">' + (best && h.sim < L.PASS ? '⭐' : '') + L.fmt(h.sim) + '%</span>' : '<span class="s">' + (h.correct ? '⭕ 정답' : '❌ 틀림') + '</span>');
   d.querySelector('.w').textContent = h.word;
   return d;
 }
@@ -215,8 +215,10 @@ function render() {
       const hs = t.hints.filter((h) => h.stage === st), gs = t.guesses.filter((h) => h.stage === st);
       if (!hs.length && !gs.length) continue;
       const head = document.createElement('div'); head.className = 'stageHead';
-      head.innerHTML = '<span>' + st + '단계 힌트</span><span>유사도 (95% 이상이면 끝)</span>'; log.appendChild(head);
-      hs.forEach((h) => log.appendChild(row('hint', '힌트', h)));
+      const closed = st < t.stage || t.phase !== 'hint';
+      const top = closed && hs.length ? hs.reduce((a, b) => (b.sim > a.sim ? b : a)) : null; // 끝난 단계에서 가장 가까운 힌트
+      head.innerHTML = '<span>' + st + '단계 힌트 ' + hs.length + '/' + L.MAX_HINTS + '</span><span>유사도 (95% 이상이면 바로 끝)</span>'; log.appendChild(head);
+      hs.forEach((h) => log.appendChild(row('hint', '힌트', h, h === top)));
       gs.forEach((h) => log.appendChild(row('guess', t.guesser === 'you' ? '나' : OPP(), h)));
     }
   }
@@ -231,10 +233,10 @@ function render() {
   if (phase === 'play' && t) {
     if (t.setter === 'cpu') {
       main = t.done ? '정답은 <b>' + esc(sw(t)) + '</b>' : OPPL() + ' 출제 · <b>' + t.stage + '단계</b>';
-      sub = t.done ? '' : t.phase === 'secret' ? '단어를 숨기는 중…' : t.phase === 'hint' ? '힌트를 내는 중… 95% 이상이 나오면 답을 써요' : rewardText(t);
+      sub = t.done ? '' : t.phase === 'secret' ? '단어를 숨기는 중…' : t.phase === 'hint' ? '힌트를 내는 중… 10개 또는 95% 이상이면 답' : rewardText(t);
     } else {
       main = t.phase === 'secret' ? '내 출제 · 숨길 단어 고르기' : '내 출제 · <b>' + t.stage + '단계</b> <span id="secretTag">' + esc(sw(t)) + '</span>';
-      sub = t.done ? '' : t.phase === 'hint' ? '95% 이상인 힌트가 나올 때까지 계속 내요' : t.phase === 'guess' || t.phase === 'extra' ? OPPL() + '가 맞히는 중… ' + rewardText(t) : '';
+      sub = t.done ? '' : t.phase === 'hint' ? '힌트 ' + L.stageHints(t).length + '/' + L.MAX_HINTS + ' · 95% 이상이면 바로 끝' : t.phase === 'guess' || t.phase === 'extra' ? OPPL() + '가 맞히는 중… ' + rewardText(t) : '';
     }
   }
   $('bannerText').innerHTML = main; baseSub = sub; tick();
@@ -281,15 +283,15 @@ function historyTable() {
 }
 
 function rulesHtml() {
-  return '<p>처음에 숨길 단어 후보 <b>5개</b>를 받아요(1라운드에 하나, 2라운드에 남은 4개 중 하나). 출제자는 숨긴 단어와 관련된 힌트를 하나씩 내고, 힌트마다 <b>유사도(%)</b>가 공개돼요. <b>95% 이상</b>인 힌트가 나와야 힌트가 끝나요.<br>' +
+  return '<p>처음에 숨길 단어 후보 <b>5개</b>를 받아요(1라운드에 하나, 2라운드에 남은 4개 중 하나). 출제자는 숨긴 단어와 관련된 힌트를 하나씩 <b>10개</b> 내고, 힌트마다 <b>유사도(%)</b>가 공개돼요. <b>95% 이상</b>인 힌트가 나오면 거기서 바로 끝나요.<br>' +
     '맞히는 쪽은 답을 <b>하나</b> 써요(🧩 피스를 쓰면 하나 더, 한 판에 ' + L.PIECES + '개). 답은 <b>맞음·틀림</b>만 알려 줘요.<br>' +
     '맞히면 <b>' + L.GUESS_PT + '점</b>. 못 맞히면 출제자가 <b>' + L.STAGE_PTS.join('·') + '점</b>(1·2·3차)을 얻고 다음 힌트로, 3차까지. <b>2라운드는 점수 2배</b>!</p>';
 }
 function overlay(html) { const ov = $('overlay'); ov.classList.remove('hidden'); ov.innerHTML = html; return ov; }
 function showTitle() {
   clearTimers(); online = false; phase = E ? 'title' : 'loading';
-  const credit = '<p class="credit">유사도: fastText 한국어 단어 벡터 (Facebook, CC BY-SA 3.0) 를 줄여 씀</p>';
-  if (!E) { overlay('<h1>🔎 숨은 단어</h1><p id="loadMsg">단어 사전을 불러오는 중… (약 2MB)</p>'); return; }
+  const credit = '<p class="credit">유사도: KURE-v1(고려대학교, MIT) + fastText 한국어(Facebook, CC BY-SA 3.0) 단어 벡터를 섞어 줄여 씀</p>';
+  if (!E) { overlay('<h1>🔎 숨은 단어</h1><p id="loadMsg">단어 사전을 불러오는 중… (약 4MB)</p>'); return; }
   if (TUT) { overlay('<h1>🔎 숨은 단어</h1>' + rulesHtml() + '<div class="col"><button id="b1">시작하기</button></div>' + credit); $('b1').onclick = () => startGame('easy'); return; }
   const ov = overlay('<h1>🔎 숨은 단어</h1>' + rulesHtml() +
     '<div class="col" id="lv">' + LEVELS.map((l) => '<button data-lv="' + l.id + '">' + l.name + '<small>' + l.desc + (rec[l.id] ? ' · ' + (rec[l.id].w || 0) + '승 ' + (rec[l.id].l || 0) + '패' : '') + '</small></button>').join('') + '</div>' +
@@ -336,7 +338,7 @@ function leaveOnline() { if (room) net.send('leave'); room = null; ignoreRooms =
 
 function showOnline(err = '') {
   clearTimers(); online = true; room = null; phase = 'lobby'; $('nextBtn').classList.add('hidden');
-  overlay('<h2>🌐 친구와 온라인</h2><p>둘이 번갈아 <b>출제</b>하고 맞혀요(2라운드). 제한 시간: 단어 고르기 30초, 힌트 한 단계 3분, 답 60초.</p>' +
+  overlay('<h2>🌐 친구와 온라인</h2><p>둘이 번갈아 <b>출제</b>하고 맞혀요(2라운드). 제한 시간: 단어 고르기 30초, 힌트 10개에 3분, 답 60초.</p>' +
     '<input id="nameInput" class="field" maxlength="10" placeholder="내 이름 (최대 10자)" autocomplete="off" value="' + esc(myName()) + '">' +
     '<div class="col"><button id="quickBtn">⚡ 빠른 대전</button><button class="sub" id="createBtn">방 만들기</button></div>' +
     '<div class="joinRow"><input id="codeInput" class="field" maxlength="4" placeholder="방 코드" autocomplete="off" autocapitalize="characters"><button class="sub" id="joinBtn">들어가기</button></div>' +
@@ -405,11 +407,11 @@ function applyRoom(s) {
     fresh = null; $('word').value = ''; $('nextBtn').classList.add('hidden');
     setMsg(t.setter === 'you' ? '이번엔 내가 출제자! 아래에서 <b>숨길 단어</b>를 골라요.' : '상대가 단어를 숨기는 중이에요…');
   } else {
-    if (pt.phase === 'secret' && t.phase !== 'secret') setMsg(t.setter === 'you' ? '<b>' + josa(esc(sw(t)), '</b>을', '</b>를') + ' 숨겼어요. 유사도 <b>95% 이상</b>인 힌트가 나올 때까지 힌트를 내요(💡 는 추천).' : '상대가 단어를 숨겼어요. 힌트를 기다려요…');
+    if (pt.phase === 'secret' && t.phase !== 'secret') setMsg(t.setter === 'you' ? '<b>' + josa(esc(sw(t)), '</b>을', '</b>를') + ' 숨겼어요. 힌트를 <b>10개</b> 내요(95% 이상이면 바로 끝, 💡 는 추천).' : '상대가 단어를 숨겼어요. 힌트를 기다려요…');
     if (t.hints.length > pt.hints.length) {
       const h = t.hints[t.hints.length - 1]; fresh = { kind: 'hint', w: h.word }; h.sim >= L.PASS ? sfx.pass() : sfx.hint();
       if (pendingWord === h.word) { $('word').value = ''; pendingWord = ''; }
-      if (t.setter === 'you') setMsg(t.phase === 'hint' ? '유사도 <b>' + L.fmt(h.sim) + '%</b>. 95% 이상인 힌트가 나올 때까지 <b>계속</b> 내요.' : '힌트 단계 끝! 상대가 맞혀요…');
+      if (t.setter === 'you') setMsg(t.phase === 'hint' ? '유사도 <b>' + L.fmt(h.sim) + '%</b>. 힌트 ' + L.stageHints(t).length + '/' + L.MAX_HINTS + ' — 계속 내요.' : '힌트 단계 끝! 상대가 맞혀요…');
       else if (t.phase === 'guess') setMsg(guessPrompt());
     }
     if (t.guesses.length > pt.guesses.length) {
@@ -480,8 +482,9 @@ if (invite) { try { history.replaceState(null, '', location.pathname + location.
 if (!TUT && loadSession()) { online = true; overlay('<h2>대전으로 돌아가는 중…</h2>'); net.connect(); setTimeout(() => { if (!room) { saveSession(null); invite ? (showOnline(), net.send('join', { code: invite.toUpperCase() })) : showOnline(); } }, 2500); }
 else if (!TUT && invite) { showOnline(); net.send('join', { code: invite.toUpperCase() }); }
 else showTitle();
-const bin = (p) => fetch(p).then((r) => { if (!r.ok) throw new Error(r.status); return r.arrayBuffer(); });
-Promise.all([fetch('data/words.txt').then((r) => { if (!r.ok) throw new Error(r.status); return r.text(); }), bin('data/vecs.bin'), bin('data/anchors.bin')])
-  .then(([txt, buf, anc]) => { E = L.makeEngine(txt, new Int8Array(buf), new Float32Array(anc)); if (phase === 'loading' && !online) showTitle(); })
+// 단어 자료는 서버가 하루 동안 캐시하게 하므로, 자료를 바꾸면 DATA_VERSION 을 올려 새로 받게 한다
+const DATA_VERSION = 'kure-ft-192';
+Promise.all([fetch('data/words.txt?v=' + DATA_VERSION).then((r) => { if (!r.ok) throw new Error(r.status); return r.text(); }), fetch('data/vecs.bin?v=' + DATA_VERSION).then((r) => { if (!r.ok) throw new Error(r.status); return r.arrayBuffer(); })])
+  .then(([txt, buf]) => { E = L.makeEngine(txt, new Int8Array(buf)); if (phase === 'loading' && !online) showTitle(); })
   .catch(() => { const m = $('loadMsg'); if (m) m.textContent = '단어 사전을 불러오지 못했어요. 새로고침해 주세요.'; });
 })();

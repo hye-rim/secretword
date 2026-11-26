@@ -13,7 +13,7 @@ const L = require('./public/logic.js');
 const PORT = process.env.PORT || 3029;
 // 제한 시간(시험에서는 환경변수로 줄인다)
 const SECRET_MS = Number(process.env.SECRET_MS) || 30000;   // 숨길 단어 고르기. 넘기면 첫 후보로
-const HINT_MS = Number(process.env.HINT_MS) || 180000;      // 한 단계 힌트(95% 이상이 나올 때까지). 넘기면 서버가 95% 이상 힌트로 끝낸다
+const HINT_MS = Number(process.env.HINT_MS) || 180000;      // 한 단계 힌트(10개, 95% 이상이면 바로 끝). 넘기면 서버가 남은 힌트를 채운다
 const GUESS_MS = Number(process.env.GUESS_MS) || 60000;     // 한 단계 답(피스 포함). 넘기면 못 맞힌 것으로
 const NEXT_MS = Number(process.env.NEXT_MS) || 12000;       // 차례 결과를 보는 시간. 둘 다 다음을 누르면 바로 넘어간다
 const GRACE_MS = 30000;         // 대국 중 연결이 끊겨도 이 시간 안에 돌아오면 이어서 한다
@@ -189,11 +189,11 @@ function chooseSecret(room, k) {
   if (k >= 0 && k < d.length && L.setSecret(g, t.setter, d[k]).ok) armHints(room);
 }
 function armHints(room) { arm(room, HINT_MS, () => autoHints(room)); }
-// 시간 안에 95% 이상 힌트를 못 내면 서버가 95% 이상 힌트를 내서 단계를 끝낸다
+// 시간 안에 힌트를 다 못 내면 서버가 규칙에 맞는 힌트로 10개를 채운다
 function autoHints(room) {
   const g = room.g, t = g.t;
   let guard = 0;
-  while (t.phase === 'hint' && guard++ < 20) { const h = L.cpuHint(g, { finish: true }); if (h < 0 || !L.addHint(g, t.setter, h).ok) break; }
+  while (t.phase === 'hint' && guard++ < 20) { const h = L.cpuHint(g); if (h < 0 || !L.addHint(g, t.setter, h).ok) break; }
   if (t.phase === 'guess') armGuess(room);
 }
 function armGuess(room) { arm(room, GUESS_MS, () => forfeit(room)); }
