@@ -8,7 +8,7 @@ const path = require('path');
 const L = require('../public/logic.js');
 
 const dir = path.join(__dirname, '..', 'public', 'data');
-const E = L.makeEngine(fs.readFileSync(path.join(dir, 'words.txt'), 'utf8'), new Int8Array(fs.readFileSync(path.join(dir, 'vecs.bin'))));
+const E = L.makeEngine(fs.readFileSync(path.join(dir, 'words.txt'), 'utf8'), new Int8Array(fs.readFileSync(path.join(dir, 'vecs.bin'))), JSON.parse(fs.readFileSync(path.join(dir, 'assoc.json'), 'utf8')));
 const W = (w) => E.find(w);
 const A = (w) => E.answers.filter((i) => E.words[i] !== w);
 
@@ -20,22 +20,25 @@ function gameWith(cpuSecret, opts = {}) {
   return g;
 }
 // 숨긴 단어와 글자가 겹치지 않고 아직 안 쓴, 순위 r 근처의 단어
-const near = (g, r) => { const tb = E.table(g.t.secret); for (let k = r - 1; k < tb.order.length; k++) { const c = L.checkHint(g, tb.order[k]); if (c.ok) return E.words[tb.order[k]]; } return null; };
+const near = (g, r) => { const tb = E.table(g.t.secret); for (let k = r - 1; k < tb.order.length; k++) { const c = L.checkHint(g, tb.order[k]); if (c.ok && c.sim < 95) return E.words[tb.order[k]]; } return null; };
 const low = (g) => near(g, 200);
 // 힌트 단계를 끝낸다(10개를 채우거나 95% 이상이 나올 때까지 낮은 힌트)
 const finishHints = (g, side = g.t.setter) => { let k = 0; while (g.t.phase === 'hint' && k < 12) { assert.ok(L.addHint(g, side, near(g, 200 + k * 40)).ok); k++; } };
 
-test('engine: absolute score scale follows human-like similarity', () => {
-  assert.ok(E.N > 15000 && E.answers.length >= 240 && E.dim === 192);
-  const sc = (a, b) => E.table(W(a)).score(W(b));
+test('engine: association lists give show-like scores, others stay modest', () => {
+  assert.ok(E.N > 20000 && E.answers.length >= 240 && E.dim === 192);
+  const sc = (a, b) => E.pairScore(W(a), W(b));
   assert.strictEqual(sc('고양이', '고양이'), 100);
-  assert.ok(sc('휴대폰', '핸드폰') >= 90, 'near synonyms are very high');
-  assert.ok(sc('기차', '열차') > sc('바나나', '코코넛'));
-  assert.ok(sc('바나나', '코코넛') > 55 && sc('바나나', '코코넛') < 85, 'related fruits are fairly high, not 99');
-  assert.ok(sc('바나나', '코코넛') > sc('바나나', '세금'));
-  assert.ok(sc('고양이', '세금') < 35, 'unrelated words are low');
-  const tb = E.table(W('바나나'));
-  assert.ok(['코코넛', '파인애플', '오렌지', '망고', '과일', '아몬드'].some((w) => tb.rank[W(w)] <= 10), 'fruit neighbours, not sound-alikes');
+  // 방송 실제 기록: 나침반-북쪽 95+, 머리-미용실 95+, 자동차-바퀴 96, 나무-뿌리 96.5, 나무-소나무 96.5
+  for (const [a, b] of [['나침반', '북쪽'], ['머리', '미용실'], ['자동차', '바퀴'], ['나무', '뿌리']]) assert.ok(sc(a, b) >= 95, a + ' ' + b);
+  assert.ok(sc('나무', '버섯') > 80 && sc('나무', '버섯') < 95, 'related but not top');
+  assert.ok(sc('나무', '질책') < 10, 'unrelated is near 0');
+  assert.ok(sc('고양이', '세금') < 20);
+  assert.ok(sc('나침반', '받침대') < 70, 'look-alike spelling is not rewarded');
+  assert.ok(sc('바나나', '원숭이') >= 95 && sc('바나나', '코코넛') < 99, 'list order decides');
+  for (const a of E.answers) assert.ok(E.list(a).length >= 15, 'every answer has a list');
+  assert.ok(W('열') >= 0 && W('물') >= 0 && W('공') >= 0 && W('도로') >= 0, 'common words are in the dictionary');
+  assert.strictEqual(L.listScore(0, 25), 99.5); assert.strictEqual(L.listScore(4, 25), 95.5); assert.ok(L.listScore(24, 25) >= 80);
 });
 
 test('decks: five words each, no overlap, round 2 picks from the remaining four', () => {
@@ -54,7 +57,7 @@ test('hints: refused words, a 95 hint ends at once, otherwise the 10th hint ends
   const g = gameWith('바다');
   assert.strictEqual(L.addHint(g, 'cpu', '없는낱말이다').err, 'unknown');
   assert.strictEqual(L.addHint(g, 'cpu', '바다').err, 'secret');
-  if (W('바다낚시') >= 0) assert.strictEqual(L.checkHint(g, '바다낚시').err, 'contains');
+  if (W('바닷가') >= 0) assert.ok(L.checkHint(g, '바닷가').ok, 'a hint may share letters with the secret, like the show (tree -> pine tree)');
   const l = low(g);
   const r = L.addHint(g, 'cpu', l);
   assert.ok(r.ok && r.sim < 95 && !r.guessNow);
@@ -131,7 +134,11 @@ test('cpu: every stage of hints is legal and ends with a 95 hint', () => {
     const g = L.newGame(E, { seed: s, level }); g.pieces.you = 0; L.setSecret(g, 'cpu', L.cpuSecret(g));
     for (let st = 1; st <= 3; st++) {
       let guard = 0;
-      while (g.t.phase === 'hint' && guard++ < 20) { const h = L.cpuHint(g); assert.ok(L.checkHint(g, h).ok, level + ' ' + E.words[h]); L.addHint(g, 'cpu', h); }
+      while (g.t.phase === 'hint' && guard++ < 20) {
+        const h = L.cpuHint(g); assert.ok(L.checkHint(g, h).ok, level + ' index ' + h);
+        assert.ok(E.list(g.t.secret).includes(h), 'computer hints come from the association list, index ' + h);
+        L.addHint(g, 'cpu', h);
+      }
       const hs = L.stageHints(g.t);
       assert.ok(hs.length === L.MAX_HINTS || hs[hs.length - 1].sim >= 95, 'stage ends by 10 hints or a 95 hint');
       assert.ok(hs.slice(0, -1).every((h) => h.sim < 95), 'earlier hints are below 95');

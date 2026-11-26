@@ -6,9 +6,11 @@
 // - 맞히는 쪽은 답을 하나 쓴다(피스를 쓰면 하나 더). 답은 맞음·틀림만 알려 주고 유사도는 보여 주지 않는다.
 // - 맞히면 맞힌 쪽 1점, 차례 끝. 못 맞히면 출제자가 단계 점수(1차 1점, 2차 2점, 3차 3점)를 얻고 다음 힌트 단계로. 3차까지.
 // - 2라운드는 모든 점수 2배.
-// 유사도 엔진: 명사 약 1.9만 개의 단어 벡터(int8, data/vecs.bin). 만든 법은 README 「단어 자료」
-//   = 한국어 문장 임베딩 KURE-v1(문장 틀 4개 평균) 35% + fastText 한국어 65% 를 이어 붙여 192차원으로 줄인 것.
-//   한국어 WS-353(사람이 매긴 353쌍)과의 스피어만 상관 0.74 (예전 fastText 만: 0.61)
+// 유사도 = 두 가지를 합친다 (README 「단어 자료」·「유사도」):
+//   ① 연상 목록(data/assoc.json): 정답 후보 252개마다 모든 뜻을 담은 연상 단어를 가까운 순으로 적어 둔 것.
+//      방송 AI 처럼 연상·여러 뜻을 후하게 쳐 준다(앞 5개 95% 이상, 끝으로 갈수록 80%까지).
+//   ② 단어 벡터(data/vecs.bin, 약 2만 단어 int8): 목록에 없는 단어. KURE-v1(연상 틀) + KR-SBERT + fastText 를 섞어 192차원.
+//      한국어 WS-353(사람이 매긴 353쌍)과 스피어만 0.79. 목록 밖 단어는 88% 를 넘지 않게, 정답을 품지 않으면서 글자만 나눠 가진 단어는 깎는다
 const LOGIC_SW = (() => {
   const STAGES = 3;
   const PASS = 95;            // 이 유사도(%) 이상인 힌트가 나오면 힌트 단계 바로 끝
@@ -23,14 +25,21 @@ const LOGIC_SW = (() => {
   const shuffle = (a, rng) => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
   const gauss = (rng) => { let u = 0, v = 0; while (!u) u = rng(); while (!v) v = rng(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
 
-  // 코사인 → 유사도(%). 한국어 WS-353 의 사람 점수(0~10)에 맞춘 직선: 점수 = 8.51 × 코사인 + 2.53 → ×10 해서 %
-  // (예: 휴대폰-핸드폰 96, 기차-열차 89, 바나나-코코넛 71, 공항-비행기 56, 고양이-세금 22)
-  function scoreFrom(cos) { return Math.max(0, Math.min(99.99, 85.1 * cos + 25.3)); }
+  // 목록 밖 단어: 코사인 → % 곡선(S자). 관련 없는 단어 0~15%, 조금 관련 40~60%, 뚜렷한 관련 75~85%, 88% 까지만
+  // (방송 기록의 관련 없는 쌍: 질책 2.5, 소설 5, 지구 8.5 에 맞추고, 목록 밖은 후하게 주지 않는다)
+  const MODEL_K = 12, MODEL_C0 = 0.2, MODEL_CAP = 88;
+  function scoreFrom(cos) { return MODEL_CAP / (1 + Math.exp(-MODEL_K * (cos - MODEL_C0))); }
+  // 목록 안 단어: 순서 p(0부터), 목록 길이 n → 앞 5개 99.5~95.5, 그 뒤 94 → 80 (0.5 단위, 방송처럼)
+  function listScore(p, n) {
+    const v = p < 5 ? 99.5 - p : 94 - (p - 5) * (14 / Math.max(1, n - 6));
+    return Math.round(Math.max(80, v) * 2) / 2;
+  }
+  const shareSyllable = (a, b) => { for (const ch of a) if (b.includes(ch)) return true; return false; };
 
   // ---------- 유사도 엔진 ----------
   // wordsText: '단어\t표시' 줄들 (2 = 정답 후보, 1 = 컴퓨터 힌트·추측용, 0 = 사람이 써도 되는 단어)
-  // vec: Int8Array (단어 수 × 차원). 차원은 길이로 안다
-  function makeEngine(wordsText, vec) {
+  // vec: Int8Array (단어 수 × 차원). 차원은 길이로 안다. assoc: { 정답: [연상 단어, …] } (없어도 됨)
+  function makeEngine(wordsText, vec, assoc) {
     const words = [], flag = [];
     for (const line of wordsText.split('\n')) { if (!line) continue; const [w, f] = line.split('\t'); words.push(w); flag.push(+f || 0); }
     const N = words.length, idx = new Map(words.map((w, i) => [w, i])), DIM = Math.round(vec.length / N);
@@ -42,6 +51,22 @@ const LOGIC_SW = (() => {
     const sim = (a, b) => { let s = 0; const oa = a * DIM, ob = b * DIM; for (let k = 0; k < DIM; k++) s += v[oa + k] * v[ob + k]; return s; };
     const answers = [], hintable = [];
     flag.forEach((f, i) => { if (f === 2) answers.push(i); if (f >= 1) hintable.push(i); }); // hintable 에는 정답 후보도 들어 있다
+    // 연상 목록: 정답 번호 → (단어 번호 → 순서), 목록 길이
+    const lists = new Map(), listArr = new Map();
+    for (const [k, ws] of Object.entries(assoc || {})) {
+      const si = idx.get(k); if (si === undefined) continue;
+      const arr = ws.map((w) => idx.get(w)).filter((x) => x !== undefined);
+      lists.set(si, new Map(arr.map((x, p) => [x, p]))); listArr.set(si, arr);
+    }
+    // 정답 secret 에 대한 단어 i 의 유사도(%)
+    function pairScore(secret, i, cos) {
+      if (i === secret) return 100;
+      const L = lists.get(secret);
+      if (L && L.has(i)) return listScore(L.get(i), listArr.get(secret).length);
+      let s = scoreFrom(cos === undefined ? sim(secret, i) : cos);
+      if (L && !words[i].includes(words[secret]) && shareSyllable(words[secret], words[i])) s *= 0.5; // 글자만 닮은 단어(나침반 - 받침대)
+      return s;
+    }
     // 숨긴 단어 하나에 대한 모든 단어의 코사인·순위·유사도(%)
     const cache = new Map();
     function table(secret) {
@@ -49,15 +74,14 @@ const LOGIC_SW = (() => {
       const sims = new Float32Array(N); for (let i = 0; i < N; i++) sims[i] = sim(secret, i);
       const order = Array.from({ length: N }, (_, i) => i).filter((i) => i !== secret).sort((a, b) => sims[b] - sims[a]);
       const rank = new Int32Array(N); order.forEach((w, r) => { rank[w] = r + 1; }); rank[secret] = 0;
-      const score = (i) => (i === secret ? 100 : scoreFrom(sims[i]));
+      const score = (i) => pairScore(secret, i, sims[i]);
       const t = { sims, rank, order, score }; if (cache.size > 40) cache.clear(); cache.set(secret, t); return t;
     }
     const norm = (s) => String(s || '').trim().replace(/\s+/g, '');
-    return { N, words, flag, idx, sim, table, answers, hintable, dim: DIM, vec: v, find: (w) => { const i = idx.get(norm(w)); return i === undefined ? -1 : i; } };
+    return { N, words, flag, idx, sim, table, answers, hintable, dim: DIM, vec: v, pairScore, list: (s) => listArr.get(s) || [], find: (w) => { const i = idx.get(norm(w)); return i === undefined ? -1 : i; } };
   }
   const fmt = (s) => (Math.floor(s * 100) / 100).toFixed(2); // 화면에 보일 유사도(내림, 소수 둘째 자리)
-  // 힌트로 쓸 수 없는 단어: 숨긴 단어와 글자가 겹치는 단어
-  const overlaps = (E, i, secret) => { const w = E.words[i], s = E.words[secret]; return w.includes(s) || s.includes(w); };
+  // 방송처럼 숨긴 단어 자체만 힌트로 못 쓴다(나무 → 소나무 는 됨)
 
   // ---------- 한 판 ----------
   // 차례 순서: 라운드마다 'cpu' 쪽이 먼저 출제, 그다음 'you'. 연습은 1라운드만
@@ -94,7 +118,6 @@ const LOGIC_SW = (() => {
     const t = g.t, E = g.E, i = typeof word === 'number' ? word : E.find(word);
     if (i < 0) return { ok: false, err: 'unknown' };
     if (i === t.secret) return { ok: false, err: 'secret' };
-    if (overlaps(E, i, t.secret)) return { ok: false, err: 'contains' };
     if (t.hints.some((h) => h.i === i)) return { ok: false, err: 'used' };
     return { ok: true, i, sim: E.table(t.secret).score(i) };
   }
@@ -152,15 +175,16 @@ const LOGIC_SW = (() => {
   const winner = (g) => (g.score.you > g.score.cpu ? 'you' : g.score.cpu > g.score.you ? 'cpu' : null);
 
   // ---------- 컴퓨터 ----------
-  // 출제: 힌트 10개를 유사도 범위 안에서 고른다(단계가 갈수록 조금 가깝게). 쉬움은 가깝게, 어려움은 멀고 헷갈리게
-  const HINT_STYLE = {
-    tutor: { band: [62, 92] },
-    easy: { band: [55, 85] },
-    normal: { band: [45, 72] },
-    hard: { band: [36, 62] },
+  // 출제(방송 출제자처럼): 연상 목록의 중간·뒤쪽 단어로 몇 개 흘린 뒤, 앞쪽(95% 이상) 단어 하나로 그 단계를 끝낸다.
+  // [먼저 낼 개수 최소, 최대], 먼저 낼 단어를 고르는 목록 구간 [시작, 끝) — 단계가 갈수록 3칸씩 앞(가까운 쪽)으로
+  const HINT_PLAN = {
+    tutor: { leads: [1, 2], win: [5, 12] },
+    easy: { leads: [1, 2], win: [5, 14] },
+    normal: { leads: [2, 3], win: [7, 20] },
+    hard: { leads: [3, 5], win: [10, 30] },
   };
-  // 맞히기: 힌트 유사도를 흐릿하게 읽는 정도(표준편차, %p). 낮을수록 잘 맞힌다
-  const NOISE = { tutor: 14, easy: 30, normal: 18, hard: 10 };
+  // 맞히기: 힌트 유사도를 흐릿하게 읽는 정도(표준편차, %p). 낮을수록 잘 맞힌다 (방송 눈금은 값이 넓게 퍼져서 크게 잡는다)
+  const NOISE = { tutor: 40, easy: 110, normal: 60, hard: 30 };
   const styleOf = (g) => (g.tutorial ? 'tutor' : g.level);
 
   function cpuSecret(g) {
@@ -168,23 +192,26 @@ const LOGIC_SW = (() => {
     return d[Math.floor(g.rng() * d.length)];
   }
   function cpuHint(g) {
-    const t = g.t, E = g.E, tb = E.table(t.secret), st = HINT_STYLE[styleOf(g)] || HINT_STYLE.normal;
-    const bump = (t.stage - 1) * 6, lo = st.band[0] + bump, hi = Math.min(94.9, st.band[1] + bump);
-    const free = (i) => !overlaps(E, i, t.secret) && !t.hints.some((h) => h.i === i) && !t.guesses.some((h) => h.i === i);
-    let cand = [];
-    for (let r = 0; r < Math.min(tb.order.length, 6000); r++) {
-      const i = tb.order[r]; if (E.flag[i] < 1 || !free(i)) continue;
-      const s = tb.score(i); if (s >= lo && s <= hi) cand.push(i); else if (s < lo) break;
+    const t = g.t, E = g.E, style = styleOf(g), P = HINT_PLAN[style] || HINT_PLAN.normal;
+    const free = (i) => i !== t.secret && !t.hints.some((h) => h.i === i) && !t.guesses.some((h) => h.i === i);
+    const list = E.list(t.secret).filter(free);
+    if (!t.plan || t.planStage !== t.stage) {
+      const shift = (t.stage - 1) * 3, lo = Math.max(5, P.win[0] - shift), hi = Math.max(lo + 3, P.win[1] - shift);
+      const all = E.list(t.secret);
+      const pool = shuffle(all.slice(lo, hi).filter(free), g.rng);
+      const n = P.leads[0] + Math.floor(g.rng() * (P.leads[1] - P.leads[0] + 1));
+      t.plan = pool.slice(0, n).sort((a, b) => all.indexOf(b) - all.indexOf(a)); // 먼 것부터
+      t.planStage = t.stage;
     }
-    if (!cand.length) for (const i of tb.order) if (E.flag[i] >= 1 && free(i) && tb.score(i) < PASS) { cand.push(i); break; }
-    shuffle(cand, g.rng);
-    if (styleOf(g) === 'hard') {
-      // 다른 정답 후보에도 가까운(헷갈리는) 단어를 고른다
-      const others = E.answers.filter((a) => a !== t.secret);
-      const conf = (i) => { let m = -1; for (const a of others) { const s = E.sim(i, a); if (s > m) m = s; } return m - tb.sims[i]; };
-      cand = cand.slice(0, 30).sort((a, b) => conf(b) - conf(a));
-    }
-    return cand.length ? cand[0] : -1;
+    const next = t.plan.find(free);
+    if (next !== undefined && stageHints(t).length < t.plan.length) return next;
+    // 마무리: 앞쪽(95% 이상) 단어 하나
+    const top = list.filter((i) => E.table(t.secret).score(i) >= PASS);
+    if (top.length) return top[Math.floor(g.rng() * top.length)];
+    if (list.length) return list[0];
+    const tb = E.table(t.secret);
+    for (const i of tb.order) if (E.flag[i] >= 1 && free(i)) return i;
+    return -1;
   }
   // 힌트 유사도와 가장 잘 맞는 단어. 정답 후보 목록은 모르는 채로(사람과 같은 조건) 힌트용 단어 1만여 개에서 찾는다
   function cpuGuess(g) {
@@ -196,9 +223,9 @@ const LOGIC_SW = (() => {
     const skip = new Set(t.guesses.map((h) => h.i).concat(t.hints.map((h) => h.i)));
     let best = -1, bestErr = Infinity;
     for (const c of E.hintable) {
-      if (skip.has(c) || obs.some((o) => overlaps(E, o.i, c))) continue;
+      if (skip.has(c)) continue;
       let err = 0;
-      for (const o of obs) { const d = scoreFrom(E.sim(c, o.i)) - o.s; err += d * d; if (err >= bestErr) break; }
+      for (const o of obs) { const d = E.pairScore(c, o.i) - o.s; err += d * d; if (err >= bestErr) break; }
       if (err < bestErr) { bestErr = err; best = c; }
     }
     return best;
@@ -225,7 +252,7 @@ const LOGIC_SW = (() => {
     return { solved: g.t.solved, stage: g.t.stage, hints: g.t.hints.length };
   }
 
-  const api = { NOISE, HINT_STYLE, STAGES, PASS, MAX_HINTS, STAGE_PTS, GUESS_PT, DECK, PIECES, LEVELS, mulberry32, scoreFrom, makeEngine, fmt, newGame, setSecret, checkHint, addHint, guess, usePiece, passExtra, forfeitGuesses, nextTurn, winner, cpuSecret, cpuHint, cpuGuess, cpuWantsPiece, simulateTurn, stageHints, stageGuesses };
+  const api = { NOISE, HINT_PLAN, listScore, STAGES, PASS, MAX_HINTS, STAGE_PTS, GUESS_PT, DECK, PIECES, LEVELS, mulberry32, scoreFrom, makeEngine, fmt, newGame, setSecret, checkHint, addHint, guess, usePiece, passExtra, forfeitGuesses, nextTurn, winner, cpuSecret, cpuHint, cpuGuess, cpuWantsPiece, simulateTurn, stageHints, stageGuesses };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   return api;
 })();

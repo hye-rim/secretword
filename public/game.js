@@ -50,7 +50,6 @@ const myHint = () => myTurnPhase('hint', 'setter');
 const ERR = {
   unknown: '사전에 없는 단어예요. <b>명사</b>를 띄어쓰기 없이 써요.',
   secret: '숨긴 단어 자체는 힌트로 못 써요.',
-  contains: '숨긴 단어와 <b>글자가 겹치는</b> 단어는 힌트로 못 써요.',
   used: '이미 낸 단어예요.',
   isHint: '힌트로 나온 단어는 정답이 아니에요.',
 };
@@ -483,8 +482,8 @@ if (!TUT && loadSession()) { online = true; overlay('<h2>대전으로 돌아가�
 else if (!TUT && invite) { showOnline(); net.send('join', { code: invite.toUpperCase() }); }
 else showTitle();
 // 단어 자료는 서버가 하루 동안 캐시하게 하므로, 자료를 바꾸면 DATA_VERSION 을 올려 새로 받게 한다
-const DATA_VERSION = 'kure-ft-192';
-Promise.all([fetch('data/words.txt?v=' + DATA_VERSION).then((r) => { if (!r.ok) throw new Error(r.status); return r.text(); }), fetch('data/vecs.bin?v=' + DATA_VERSION).then((r) => { if (!r.ok) throw new Error(r.status); return r.arrayBuffer(); })])
-  .then(([txt, buf]) => { E = L.makeEngine(txt, new Int8Array(buf)); if (phase === 'loading' && !online) showTitle(); })
+const DATA_VERSION = 'assoc-1';
+Promise.all([fetch('data/words.txt?v=' + DATA_VERSION).then((r) => { if (!r.ok) throw new Error(r.status); return r.text(); }), fetch('data/vecs.bin?v=' + DATA_VERSION).then((r) => { if (!r.ok) throw new Error(r.status); return r.arrayBuffer(); }), fetch('data/assoc.json?v=' + DATA_VERSION).then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); })])
+  .then(([txt, buf, assoc]) => { E = L.makeEngine(txt, new Int8Array(buf), assoc); if (phase === 'loading' && !online) showTitle(); })
   .catch(() => { const m = $('loadMsg'); if (m) m.textContent = '단어 사전을 불러오지 못했어요. 새로고침해 주세요.'; });
 })();

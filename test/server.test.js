@@ -184,7 +184,10 @@ test('when nobody acts, timers end every stage and the setter scores 1+2+3', asy
   const [a, b] = await pair();
   const [s, q] = roles(a, b);
   assert.ok(await until(() => s.room.turn.done, 10 * T), 'the turn finishes on timers alone');
-  for (let st = 1; st <= 3; st++) assert.strictEqual(s.room.turn.hints.filter((h) => h.stage === st).length, 10, 'ten hints per stage were filled');
+  for (let st = 1; st <= 3; st++) {
+    const hs = s.room.turn.hints.filter((h) => h.stage === st);
+    assert.ok(hs.length === 10 || hs[hs.length - 1].sim >= 95, 'each stage was filled until 10 hints or a 95 hint');
+  }
   assert.deepStrictEqual(s.room.score, { me: 6, opp: 0 });
   assert.ok(await until(() => !s.room.turn.done && q.room.turn.iSet, 2 * T + 500), 'next turn starts by itself');
   a.ws.close(); b.ws.close();

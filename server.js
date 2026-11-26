@@ -23,7 +23,7 @@ const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 // ---------- 단어 자료 ----------
 const PUBLIC_DIR = path.join(__dirname, 'public');
-const E = L.makeEngine(fs.readFileSync(path.join(PUBLIC_DIR, 'data', 'words.txt'), 'utf8'), new Int8Array(fs.readFileSync(path.join(PUBLIC_DIR, 'data', 'vecs.bin'))));
+const E = L.makeEngine(fs.readFileSync(path.join(PUBLIC_DIR, 'data', 'words.txt'), 'utf8'), new Int8Array(fs.readFileSync(path.join(PUBLIC_DIR, 'data', 'vecs.bin'))), JSON.parse(fs.readFileSync(path.join(PUBLIC_DIR, 'data', 'assoc.json'), 'utf8')));
 
 // ---------- Static file server ----------
 function safeDecode(s) {
@@ -42,6 +42,7 @@ const MIME = {
   '.css': 'text/css; charset=utf-8',
   '.txt': 'text/plain; charset=utf-8',
   '.bin': 'application/octet-stream',
+  '.json': 'application/json; charset=utf-8',
 };
 const server = http.createServer((req, res) => {
   let reqPath = safeDecode(req.url.split('?')[0]);
@@ -52,7 +53,7 @@ const server = http.createServer((req, res) => {
   fs.readFile(filePath, (err, data) => {
     if (err) { res.writeHead(404); res.end('Not found'); return; }
     const ext = path.extname(filePath);
-    res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Cache-Control': ext === '.bin' || ext === '.txt' ? 'public, max-age=86400' : 'no-cache' });
+    res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Cache-Control': ext === '.bin' || ext === '.txt' || ext === '.json' ? 'public, max-age=86400' : 'no-cache' });
     res.end(data);
   });
 });
